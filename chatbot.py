@@ -4,77 +4,67 @@ import streamlit as st
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.chains import ConversationalRetrievalChain
-from langchain.memory import ConversationBufferMemory
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+from sentence_transformers import SentenceTransformer
 
-# Set environment variables for SSL and Hugging Face API token
+
+
+import os
 os.environ['CURL_CA_BUNDLE'] = ''
 os.environ['REQUESTS_CA_BUNDLE'] = ''
-os.environ["HUGGINGFACEHUB_API_TOKEN"] = "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"
 
-# Function to extract text and metadata from PDF files
+import os
+
+os.environ["HUGGINGFACEHUB_API_TOKEN"] = "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"
+HUGGINGFACEHUB_API_TOKEN = os.getenv("HUGGINGFACEHUB_API_TOKEN" )
+
+
 def extract_texts_from_pdfs(directory):
-    text_data = []
-    pdf_files = [f for f in os.listdir(directory) if f.endswith('.pdf')]
+    text_data=[]
+    pdf_files =[f for f in os.listdir(directory) if f.endswith('.pdf')]
     for pdf_file in pdf_files:
-        with open(os.path.join(directory, pdf_file), 'rb') as file:
+        with open(os.path.join(directory, pdf_file),'rb') as file:
             reader = PyPDF2.PdfReader(file)
-            for page_num, page in enumerate(reader.pages):
-                text_data.append({
-                    'text': page.extract_text(),
-                    'source': pdf_file,
-                    'page': page_num + 1
-                })
+            for page in reader.pages:
+                text_data.append(page.extract_text())
+
     return text_data
 
-# Directory containing PDF files
-directory = 'DATA'
-text_data = extract_texts_from_pdfs(directory)
+directory= 'DATA'
+text_data= extract_texts_from_pdfs(directory)
 
-# Split text into manageable chunks and include metadata
-text_splitter = RecursiveCharacterTextSplitter(chunk_size=512)
-documents = []
-for item in text_data:
-    chunks = text_splitter.split_text(item['text'])
-    for chunk in chunks:
-        documents.append({
-            'text': chunk,
-            'metadata': {
-                'source': item['source'],
-                'page': item['page']
-            }
-        })
+text_splitter= RecursiveCharacterTextSplitter(chunk_size=512)
+documents= [text_splitter.split_text(text) for text in text_data]
 
-# Create embeddings for text chunks
-embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-texts = [doc['text'] for doc in documents]
-metadata = [doc['metadata'] for doc in documents]
-vectors = embeddings.embed_texts(texts)
+documents= [item for sublist in documents for item in sublist]
 
-# Create FAISS vector store with metadata
-vector_store = FAISS(vectors=vectors, metadata=metadata)
 
-# Load tokenizer and model from Hugging Face
-tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-xl", use_auth_token=os.getenv("HUGGINGFACEHUB_API_TOKEN"))
-model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-xl", use_auth_token=os.getenv("HUGGINGFACEHUB_API_TOKEN"))
+embeddings=HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-# Initialize conversational memory
-memory = ConversationBufferMemory()
+vector_store= FAISS.from_texts(documents, embedding=embeddings)
 
-# Initialize conversational retrieval chain
-conversational_chain = ConversationalRetrievalChain(
-    vector_store=vector_store,
-    memory=memory,
-    model=model,
-    tokenizer=tokenizer
-)
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 
-# Streamlit interface
-st.title("RAG Chatbot with Memory")
+
+tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-4k-instruct", use_auth_token=HUGGINGFACEHUB_API_TOKEN)
+model = AutoModelForSeq2SeqLM.from_pretrained("microsoft/Phi-3-mini-4k-instruct", use_auth_token=HUGGINGFACEHUB_API_TOKEN)
+
+
+def  generate_response(prompt, vector_store, model, tokenizer):
+    docs= vector_store.similarity_search(prompt, k=5)
+    context= " ".join([doc.page_content for doc in docs])
+
+    input_text= f"Conext: {context}\n\nQuestion: {prompt}\nAnswer:"
+
+    inputs=tokenizer.encode(input_text, padding=True, max_length=1024, truncation=True, return_tensors='pt')
+    outputs= model.generate(inputs, max_length=150, num_return_sequences=1)
+    answer= tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+    return answer
+
+st.title("RAG chatbot")
+
 prompt = st.text_input("Ask me anything:")
 
 if prompt:
-    # Use conversational chain to get response
-    response = conversational_chain.ask(prompt)
+    response= generate_response(prompt, vector_store, model, tokenizer)
     st.write("Response:", response)
