@@ -37,11 +37,12 @@ def split_texts_with_metadata(text_data, chunk_size=512):
     return documents, metadata
 
 def generate_response(prompt, vector_store, model, tokenizer, documents, metadata):
-    docs_indices = vector_store.similarity_search(prompt, k=5)
+    docs = vector_store.similarity_search(prompt, k=5)
     context_chunks = []
-    for index in docs_indices:
-        doc_text = documents[index]
-        doc_metadata = metadata[index]
+    for doc in docs:
+        doc_text = doc.page_content
+        doc_index = documents.index(doc_text)
+        doc_metadata = metadata[doc_index]
         context_chunks.append(f"{doc_metadata['source']} (Page {doc_metadata['page_number']}): {doc_text}")
     
     context = " ".join(context_chunks)
@@ -73,6 +74,6 @@ st.title("RAG chatbot")
 prompt = st.text_input("Ask me anything:")
 
 if prompt:
-    response, metadata = generate_response(prompt, vector_store, model, tokenizer, documents, metadata)
+    response, context = generate_response(prompt, vector_store, model, tokenizer, documents, metadata)
     st.write("Response:", response)
-    st.write("Metadata:", metadata)
+    st.write("Context:", context)
