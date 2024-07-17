@@ -1,71 +1,56 @@
-import PyPDF2
-import os
-import streamlit as st
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from sentence_transformers import SentenceTransformer
+import cv2
+import pytesseract
+import numpy as np
 
+# Set the path for Tesseract if it's not added to PATH
+pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
+def extract_lines_and_text(image_path):
+    # Read the image
+    image = cv2.imread(image_path)
+    output_image = image.copy()
 
-import os
-os.environ['CURL_CA_BUNDLE'] = ''
-os.environ['REQUESTS_CA_BUNDLE'] = ''
+    # Use Canny edge detection
+    edges = cv2.Canny(image, 50, 150)
 
-import os
+    # Find lines using Hough Transform
+    lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=100, minLineLength=100, maxLineGap=10)
 
-os.environ["HUGGINGFACEHUB_API_TOKEN"] = "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"
-HUGGINGFACEHUB_API_TOKEN = os.getenv("HUGGINGFACEHUB_API_TOKEN" )
+    # Prepare a dictionary to store results
+    result = {}
 
+    if lines is not None:
+        for line in lines:
+            x1, y1, x2, y2 = line[0]
+            # Extract text at the ends of the lines
+            start_text = pytesseract.image_to_string(image[y1:y1 + 20, x1:x1 + 100]).strip()
+            end_text = pytesseract.image_to_string(image[y2:y2 + 20, x2 - 100:x2]).strip()
 
-def extract_texts_from_pdfs(directory):
-    text_data=[]
-    pdf_files =[f for f in os.listdir(directory) if f.endswith('.pdf')]
-    for pdf_file in pdf_files:
-        with open(os.path.join(directory, pdf_file),'rb') as file:
-            reader = PyPDF2.PdfReader(file)
-            for page in reader.pages:
-                text_data.append(page.extract_text())
+            # Draw the line
+            cv2.line(output_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-    return text_data
+            # Draw rectangles around the text areas
+            cv2.rectangle(output_image, (x1, y1), (x1 + 100, y1 + 20), (255, 0, 0), 1)
+            cv2.rectangle(output_image, (x2 - 100, y2), (x2, y2 + 20), (255, 0, 0), 1)
 
-directory= 'DATA'
-text_data= extract_texts_from_pdfs(directory)
+            # Store in dictionary as key-value pair
+            if start_text and end_text:
+                result[start_text] = end_text
 
-text_splitter= RecursiveCharacterTextSplitter(chunk_size=512)
-documents= [text_splitter.split_text(text) for text in text_data]
+            # Put text on the image
+            cv2.putText(output_image, start_text, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+            cv2.putText(output_image, end_text, (x2 - 100, y2 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
 
-documents= [item for sublist in documents for item in sublist]
+    # Save or display the output image
+    cv2.imshow('Detected Lines and Text', output_image)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+    
+    return result
 
+# Example usage
+image_path = 'path/to/your/image.jpg'
+text_pairs = extract_lines_and_text(image_path)
 
-embeddings=HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-
-vector_store= FAISS.from_texts(documents, embedding=embeddings)
-
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-
-
-tokenizer = AutoTokenizer.from_pretrained("./flan-t5-base_tokenizer")
-model = AutoModelForSeq2SeqLM.from_pretrained("./flan-t5-base_model")
-
-
-
-def  generate_response(prompt, vector_store, model, tokenizer):
-    docs= vector_store.similarity_search(prompt, k=5)
-    context= " ".join([doc.page_content for doc in docs])
-
-    input_text= f"Conext: {context}\n\nQuestion: {prompt}\nAnswer:"
-
-    inputs=tokenizer.encode(input_text, padding=True, max_length=512, truncation=True, return_tensors='pt')
-    outputs= model.generate(inputs, max_length=150, num_return_sequences=1)
-    answer= tokenizer.decode(outputs[0], skip_special_tokens=True)
-
-    return answer
-
-st.title("RAG chatbot")
-
-prompt = st.text_input("Ask me anything:")
-
-if prompt:
-    response= generate_response(prompt, vector_store, model, tokenizer)
-    st.write("Response:", response)
+for key, value in text_pairs.items():
+    print(f"{key}: {value}")
