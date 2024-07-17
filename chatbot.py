@@ -1,64 +1,39 @@
-from langchain.llms import LLaMAcpp
-from langchain.prompts import ChatPromptTemplate
-from langchain.chains import ConversationalRetrievalChain
-from langchain.memory import ConversationBufferMemory
+import cv2
+import pytesseract
+import numpy as np
 
-# Initialize the conversation memory
-memory = ConversationBufferMemory()
+# Set the path for Tesseract if it's not added to PATH
+pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
-# Define a chat prompt template
-chat_prompt_template = ChatPromptTemplate(
-    input_variables=["input", "history"],
-    template="""
-    {history}
-    User: {input}
-    Assistant:"""
-)
+def extract_lines_and_text(image_path):
+    # Read the image
+    image = cv2.imread(image_path)
 
-# Initialize llama.cpp model
-model_path = "path/to/llama-2-7b.gguf"
-llama_model = LLaMAcpp(model_path=model_path)
+    # Use Canny edge detection (may be optional for black and white)
+    edges = cv2.Canny(image, 50, 150)
 
-def generate_response(prompt, vector_store, model, documents, metadata, memory):
-    # Retrieve similar documents
-    docs = vector_store.similarity_search(prompt, k=5)
-    context_chunks = []
-    for doc in docs:
-        doc_text = doc.page_content
-        doc_index = documents.index(doc_text)
-        doc_metadata = metadata[doc_index]
-        context_chunks.append(f"{doc_metadata['source']} (Page {doc_metadata['page_number']}): {doc_text}")
-    
-    context = " ".join(context_chunks)
+    # Find lines using Hough Transform
+    lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=100, minLineLength=100, maxLineGap=10)
 
-    chain = ConversationalRetrievalChain.from_llm(
-        llm=model,
-        retriever=vector_store.as_retriever(),
-        memory=memory,
-        prompt_template=chat_prompt_template,
-        return_source_documents=True
-    )
-    response = chain.run({"input": prompt, "history": memory.load_memory()})
-    memory.save_context({"input": prompt}, {"result": response['result']})
-    
-    # Include the source documents' metadata in the response
-    source_docs_metadata = []
-    for doc in response['source_documents']:
-        doc_text = doc.page_content
-        doc_index = documents.index(doc_text)
-        doc_metadata = metadata[doc_index]
-        source_docs_metadata.append(f"{doc_metadata['source']} (Page {doc_metadata['page_number']}): {doc_text}")
+    # Prepare a dictionary to store results
+    result = {}
 
-    response['result'] += "\n\nSources:\n" + "\n".join(source_docs_metadata)
+    if lines is not None:
+        for line in lines:
+            x1, y1, x2, y2 = line[0]
+            # Adjust regions based on line position
+            start_text = pytesseract.image_to_string(image[y1:y1 + 20, x1:x1 + 100]).strip()
+            end_text = pytesseract.image_to_string(image[y2:y2 + 20, x2 - 100:x2]).strip()
 
-    return response['result'], context
+            # Store in dictionary as key-value pair
+            if start_text and end_text:
+                result[start_text] = end_text
 
-# Load the vector store
-vector_store = FAISS.load("vector_store.faiss")
+    return result
 
-# Example interaction
-prompts = ["What is the main topic of the documents?", "Can you provide more details on the second document?"]
+# Example usage
+image_path = 'path/to/your/image.jpg'
+text_pairs = extract_lines_and_text(image_path)
 
-for prompt in prompts:
-    response, context = generate_response(prompt, vector_store, llama_model, documents, metadata, memory)
-    print(f"Question: {prompt}\nAnswer: {response}\nContext: {context}\n")
+for key, value in text_pairs.items():
+    print(f"{key}: {value}")
